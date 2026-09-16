@@ -151,8 +151,11 @@ class PhotoSignature:
     ahash: int = 0
     whash: int = 0
     color_sig: int = 0
+    crop_phash: int = 0                 # hashes do recorte central (detecta recortes)
+    crop_dhash: int = 0
     gray: np.ndarray | None = None      # 32x32 uint8
     descriptor: np.ndarray | None = None
+    crop_descriptor: np.ndarray | None = None
     quality: float = 0.0
     texture: float = 0.0                # energia de bordas (confiabilidade dos hashes)
     taken_at: str = ""
@@ -197,8 +200,11 @@ class AnalysisResult:
     ahash: int = 0
     whash: int = 0
     color_sig: int = 0
+    crop_phash: int = 0
+    crop_dhash: int = 0
     gray_blob: bytes = b""
     desc_blob: bytes = b""
+    crop_desc_blob: bytes = b""
     quality: QualityReport = field(default_factory=QualityReport)
     exif: ExifData = field(default_factory=ExifData)
     bad_flags: list[str] = field(default_factory=list)

@@ -21,7 +21,7 @@ from ..paths import db_path
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -66,8 +66,11 @@ CREATE TABLE IF NOT EXISTS photos (
     ahash        INTEGER NOT NULL DEFAULT 0,
     whash        INTEGER NOT NULL DEFAULT 0,
     color_sig    INTEGER NOT NULL DEFAULT 0,
+    crop_phash   INTEGER NOT NULL DEFAULT 0,
+    crop_dhash   INTEGER NOT NULL DEFAULT 0,
     gray         BLOB,
     descriptor   BLOB,
+    crop_desc    BLOB,
     desc_version INTEGER NOT NULL DEFAULT 0,
     quality      REAL NOT NULL DEFAULT 0,
     quality_json TEXT NOT NULL DEFAULT '{}',
@@ -184,11 +187,29 @@ class Database:
         with self._lock:
             self._conn.executescript(SCHEMA)
             current = int(self.get_meta("schema_version", "0") or 0)
-            if current < SCHEMA_VERSION:
-                # Migrações futuras entram aqui, uma função por versão.
+            if current and current < SCHEMA_VERSION:
+                self._apply_migrations(current)
+            if current != SCHEMA_VERSION:
                 self.set_meta("schema_version", str(SCHEMA_VERSION))
-                log.info("Banco atualizado para o esquema v%s", SCHEMA_VERSION)
+                log.info("Banco no esquema v%s", SCHEMA_VERSION)
             self._conn.commit()
+
+    def _apply_migrations(self, current: int) -> None:
+        """Atualiza bancos de versões anteriores preservando o cache de análise."""
+        if current < 2:
+            # v2: assinaturas do recorte central (detecção de fotos recortadas).
+            for column, ddl in (
+                ("crop_phash", "INTEGER NOT NULL DEFAULT 0"),
+                ("crop_dhash", "INTEGER NOT NULL DEFAULT 0"),
+                ("crop_desc", "BLOB"),
+            ):
+                try:
+                    self._conn.execute(f"ALTER TABLE photos ADD COLUMN {column} {ddl}")
+                except sqlite3.OperationalError:
+                    pass  # coluna já existe
+            # Força a reanálise para preencher as novas assinaturas.
+            self._conn.execute("UPDATE files SET status='pending' WHERE status='analyzed'")
+            log.info("Migração v2 aplicada: as fotos serão reanalisadas para gerar as assinaturas de recorte")
 
     # ------------------------------------------------------------------- infra
     @property

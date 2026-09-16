@@ -36,6 +36,11 @@ log = logging.getLogger(__name__)
 _LSH_BITS = 14
 _LSH_TABLES = 3
 
+# Uma foto só é colocada em um grupo se aquele for (praticamente) o seu melhor
+# par. Com isso, uma cópia não é "capturada" por uma foto parecida qualquer
+# quando existe outra muito mais parecida esperando para formar grupo.
+DEFER_MARGIN = 1.5
+
 
 @dataclass
 class GroupingOptions:
@@ -100,6 +105,7 @@ class GroupBuilder:
         self.stats = GroupingStats(files=len(self.sigs))
         self._index_of = {sig.file_id: i for i, sig in enumerate(self.sigs)}
         self._results: dict[tuple[int, int], SimilarityResult] = {}
+        self._best_match: dict[int, float] = {}
 
     # ------------------------------------------------------------- candidatos
     def _candidate_pairs(self) -> list[tuple[int, int]]:
@@ -110,6 +116,14 @@ class GroupBuilder:
             for h_id, value in enumerate((sig.phash, sig.dhash, sig.whash, sig.color_sig)):
                 for b_id, band in enumerate(bands(value, self.opts.band_count)):
                     buckets[(h_id, b_id, band)].append(idx)
+            if self.opts.detect_crops:
+                # Os hashes do recorte central entram nos mesmos buckets dos
+                # hashes inteiros: assim uma foto recortada encontra a original.
+                for h_id, value in ((0, sig.crop_phash), (1, sig.crop_dhash)):
+                    if not value:
+                        continue
+                    for b_id, band in enumerate(bands(value, self.opts.band_count)):
+                        buckets[(h_id, b_id, band)].append(idx)
 
         if self.opts.use_embeddings:
             self._add_lsh_buckets(buckets)
@@ -133,6 +147,10 @@ class GroupBuilder:
                     continue
                 for j in range(i + 1, size):
                     b = members[j]
+                    if a == b:
+                        # A mesma foto pode cair duas vezes no bucket (hash
+                        # inteiro e hash do recorte coincidem). Não é um par.
+                        continue
                     if counts[b] >= cap or counts[a] >= cap:
                         continue
                     key = (a, b) if a < b else (b, a)
@@ -170,11 +188,11 @@ class GroupBuilder:
         for table in range(_LSH_TABLES):
             planes = embeddings.random_hyperplanes(dims, _LSH_BITS, seed=9_100 + table * 977)
             for idx, sig in enumerate(self.sigs):
-                vec = sig.descriptor
-                if vec is None or vec.size != dims:
-                    continue
-                key = embeddings.lsh_key(np.asarray(vec, dtype=np.float32), planes)
-                buckets[(90 + table, 0, key)].append(idx)
+                for vec in (sig.descriptor, sig.crop_descriptor if self.opts.detect_crops else None):
+                    if vec is None or vec.size != dims:
+                        continue
+                    key = embeddings.lsh_key(np.asarray(vec, dtype=np.float32), planes)
+                    buckets[(90 + table, 0, key)].append(idx)
 
     # ----------------------------------------------------------- verificação
     def _verify(self, pairs: list[tuple[int, int]], progress: Callable[[int, int], None] | None):
@@ -195,6 +213,10 @@ class GroupBuilder:
             if result.percent >= thr.similar_min:
                 self._results[(i, j)] = result
                 accepted.append((i, j, result))
+                if result.percent > self._best_match.get(i, 0.0):
+                    self._best_match[i] = result.percent
+                if result.percent > self._best_match.get(j, 0.0):
+                    self._best_match[j] = result.percent
             if progress is not None and (n % 2000 == 0 or n == total - 1):
                 progress(n + 1, total)
         self.stats.accepted_pairs = len(accepted)
@@ -301,6 +323,9 @@ class GroupBuilder:
 
         clusters: list[tuple[list[int], set[int]]] = []
         used_anchors: set[int] = set()
+        deferred: set[int] = set()
+        strict_keys = self.opts.strict and threshold >= self.opts.thresholds.duplicate_min
+
         for seed in order:
             if seed not in pending:
                 continue
@@ -308,18 +333,39 @@ class GroupBuilder:
             cluster = [seed]
             fresh = {seed}
             anchor_used: int | None = None
+            cluster_keys = {self.sigs[seed].capture_key} - {""}
             neighbours = sorted(adjacency.get(seed, ()), key=lambda i: (-self.sigs[i].quality, i))
             for other in neighbours:
                 is_pending = other in pending
                 is_free_anchor = other in anchor_set and other not in used_anchors and anchor_used is None
                 if not is_pending and not is_free_anchor:
                     continue
-                if self._similarity(seed, other).percent < threshold:
+                percent = self._similarity(seed, other).percent
+                if percent < threshold:
                     continue
+
+                # Instantes de captura conflitantes dentro do grupo: são fotos
+                # diferentes da mesma cena (rajada), nunca duplicatas.
+                other_key = self.sigs[other].capture_key
+                if strict_keys and other_key and cluster_keys and other_key not in cluster_keys:
+                    continue
+
+                # Existe um par bem melhor para esta foto? Então deixamos que
+                # ela forme grupo com ele, em vez de prendê-la aqui.
+                if (
+                    is_pending
+                    and other not in deferred
+                    and percent + DEFER_MARGIN < self._best_match.get(other, 0.0)
+                ):
+                    deferred.add(other)
+                    continue
+
                 cluster.append(other)
                 if is_pending:
                     pending.discard(other)
                     fresh.add(other)
+                    if other_key:
+                        cluster_keys.add(other_key)
                 else:
                     anchor_used = other
             if len(cluster) > 1:
@@ -364,6 +410,14 @@ class GroupBuilder:
             )
         if len(members) < 2:
             return None
+
+        # Rede de segurança: se o grupo reúne fotos com instantes de captura
+        # distintos, elas não são versões do mesmo arquivo - são fotos
+        # diferentes. O grupo é rebaixado e nada é sugerido para remoção.
+        if self.opts.strict and category in (Category.VISUAL,):
+            keys = {self.sigs[i].capture_key for i in cluster if self.sigs[i].capture_key}
+            if len(keys) > 1:
+                category = Category.VERY_SIMILAR
 
         # Recomendação conservadora: só sugerimos remover em duplicatas (exatas
         # ou visuais). Em "muito semelhante"/"semelhante" a decisão é do usuário.

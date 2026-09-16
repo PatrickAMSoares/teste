@@ -150,7 +150,9 @@ class Repository:
                     file_id, res.width, res.height, res.format, res.mode, res.sha256,
                     to_signed(res.phash), to_signed(res.dhash), to_signed(res.ahash),
                     to_signed(res.whash), to_signed(res.color_sig),
-                    res.gray_blob or None, res.desc_blob or None, DESCRIPTOR_VERSION,
+                    to_signed(res.crop_phash), to_signed(res.crop_dhash),
+                    res.gray_blob or None, res.desc_blob or None, res.crop_desc_blob or None,
+                    DESCRIPTOR_VERSION,
                     float(res.quality.score), json.dumps(res.quality.to_dict(), ensure_ascii=False),
                     float(res.quality.sharpness_raw), float(res.quality.bits_per_pixel), float(res.texture),
                     json.dumps(_exif_payload(exif), ensure_ascii=False), 1 if exif.present else 0,
@@ -166,19 +168,20 @@ class Repository:
             conn.executemany(
                 """INSERT INTO photos(
                        file_id, width, height, format, mode, sha256,
-                       phash, dhash, ahash, whash, color_sig,
-                       gray, descriptor, desc_version,
+                       phash, dhash, ahash, whash, color_sig, crop_phash, crop_dhash,
+                       gray, descriptor, crop_desc, desc_version,
                        quality, quality_json, sharpness, bpp, texture,
                        exif_json, has_exif, taken_at, capture_key, camera, lens,
                        iso, aperture, shutter, gps_lat, gps_lon,
                        bad_flags, bad_json, thumb, analyzed_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(file_id) DO UPDATE SET
                        width=excluded.width, height=excluded.height, format=excluded.format,
                        mode=excluded.mode, sha256=excluded.sha256, phash=excluded.phash,
                        dhash=excluded.dhash, ahash=excluded.ahash, whash=excluded.whash,
-                       color_sig=excluded.color_sig, gray=excluded.gray, descriptor=excluded.descriptor,
-                       desc_version=excluded.desc_version, quality=excluded.quality,
+                       color_sig=excluded.color_sig, crop_phash=excluded.crop_phash,
+                       crop_dhash=excluded.crop_dhash, gray=excluded.gray, descriptor=excluded.descriptor,
+                       crop_desc=excluded.crop_desc, desc_version=excluded.desc_version, quality=excluded.quality,
                        quality_json=excluded.quality_json, sharpness=excluded.sharpness,
                        bpp=excluded.bpp, texture=excluded.texture, exif_json=excluded.exif_json,
                        has_exif=excluded.has_exif, taken_at=excluded.taken_at,
@@ -214,7 +217,8 @@ class Repository:
         """
         sql = (
             "SELECT p.file_id, f.path, f.size, p.width, p.height, p.format, p.sha256, "
-            "       p.phash, p.dhash, p.ahash, p.whash, p.color_sig, p.gray, p.descriptor, "
+            "       p.phash, p.dhash, p.ahash, p.whash, p.color_sig, p.crop_phash, p.crop_dhash, "
+            "       p.gray, p.descriptor, p.crop_desc, "
             "       p.quality, p.texture, p.taken_at, p.capture_key, p.camera "
             "FROM photos p JOIN files f ON f.id = p.file_id "
         )
@@ -233,6 +237,7 @@ class Repository:
                 desc_len = len(row["descriptor"]) // 2
                 break
         desc_matrix = np.zeros((n, desc_len), dtype=np.float32) if desc_len else None
+        crop_matrix = np.zeros((n, desc_len), dtype=np.float32) if desc_len else None
 
         signatures: list[PhotoSignature] = []
         for i, row in enumerate(rows):
@@ -245,6 +250,10 @@ class Repository:
             if desc_matrix is not None and row["descriptor"] and len(row["descriptor"]) // 2 == desc_len:
                 desc_matrix[i] = np.frombuffer(row["descriptor"], dtype=np.float16).astype(np.float32)
                 desc_view = desc_matrix[i]
+            crop_view = None
+            if crop_matrix is not None and row["crop_desc"] and len(row["crop_desc"]) // 2 == desc_len:
+                crop_matrix[i] = np.frombuffer(row["crop_desc"], dtype=np.float16).astype(np.float32)
+                crop_view = crop_matrix[i]
             signatures.append(
                 PhotoSignature(
                     file_id=int(row["file_id"]),
@@ -259,8 +268,11 @@ class Repository:
                     ahash=from_signed(int(row["ahash"])),
                     whash=from_signed(int(row["whash"])),
                     color_sig=from_signed(int(row["color_sig"])),
+                    crop_phash=from_signed(int(row["crop_phash"] or 0)),
+                    crop_dhash=from_signed(int(row["crop_dhash"] or 0)),
                     gray=gray_view,
                     descriptor=desc_view,
+                    crop_descriptor=crop_view,
                     quality=float(row["quality"]),
                     texture=float(row["texture"]),
                     taken_at=row["taken_at"],

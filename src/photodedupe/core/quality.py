@@ -231,7 +231,9 @@ def originality_score(path: str, fmt: str, exif: ExifData, width: int, height: i
     """0 a 1: chance de este arquivo ser o original, e não uma reexportação."""
     score = 0.5
     notes: list[str] = []
-    name = Path(path).name
+    # Os padrões são testados sobre o nome sem extensão: "IMG_1234 (1).jpg"
+    # precisa casar com o sufixo de cópia no fim do nome.
+    name = Path(path).stem
 
     for pattern, note in _COPY_PATTERNS:
         if pattern.search(name):

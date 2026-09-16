@@ -89,6 +89,12 @@ def analyze_path(path: str, options: AnalyzerOptions | None = None) -> AnalysisR
     result.color_sig = hashing.color_signature(decoded.rgb_desc)
     result.texture = imaging.gradient_energy(decoded.gray_desc)
 
+    # Assinaturas do recorte central: permitem reconhecer a mesma foto quando
+    # uma das versões foi recortada (as bordas mudam, o centro não).
+    cropped_gray = imaging.center_crop_resize(gray)
+    result.crop_phash = hashing.phash(cropped_gray)
+    result.crop_dhash = hashing.dhash(cropped_gray)
+
     if opts.store_gray_signature:
         result.gray_blob = np.clip(gray, 0, 255).astype(np.uint8).tobytes()
 
@@ -96,6 +102,11 @@ def analyze_path(path: str, options: AnalyzerOptions | None = None) -> AnalysisR
         provider = embeddings.get_provider(opts.onnx_model_path, opts.use_gpu)
         vector = provider.compute(decoded.gray_desc, decoded.rgb_desc)
         result.desc_blob = embeddings.pack(vector)
+        crop_vector = provider.compute(
+            imaging.center_crop_resize(decoded.gray_desc),
+            imaging.center_crop_resize(decoded.rgb_desc),
+        )
+        result.crop_desc_blob = embeddings.pack(crop_vector)
 
     exif: ExifData = read_exif(path)
     result.exif = exif
@@ -146,8 +157,11 @@ def signature_from_result(file_id: int, result: AnalysisResult) -> PhotoSignatur
         ahash=result.ahash,
         whash=result.whash,
         color_sig=result.color_sig,
+        crop_phash=result.crop_phash,
+        crop_dhash=result.crop_dhash,
         gray=gray,
         descriptor=embeddings.unpack(result.desc_blob),
+        crop_descriptor=embeddings.unpack(result.crop_desc_blob),
         quality=result.quality.score,
         texture=result.texture,
         taken_at=result.exif.taken_at,

@@ -20,6 +20,7 @@ Características importantes:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import threading
@@ -119,10 +120,19 @@ class AnalysisPipeline:
             self._resume.wait(0.2)
 
     # ------------------------------------------------------------------ fluxo
-    def run(self, folders: list[str] | None = None) -> ScanStats:
-        """Executa a análise inteira. Bloqueia até terminar (ou ser cancelada)."""
-        self._running = True
+    def reset(self) -> None:
+        """Prepara a instância para uma nova execução (limpa cancelamento e pausa)."""
         self._cancel.clear()
+        self._resume.set()
+        self.stats = ScanStats()
+
+    def run(self, folders: list[str] | None = None) -> ScanStats:
+        """Executa a análise inteira. Bloqueia até terminar (ou ser cancelada).
+
+        Um cancelamento pedido **antes** do início é respeitado: cada execução
+        usa uma instância nova, e ``reset()`` existe para reaproveitar uma.
+        """
+        self._running = True
         self._resume.set()
         started = time.perf_counter()
         folder_list = folders if folders is not None else [f["path"] for f in self.repo.list_folders()]
@@ -329,6 +339,19 @@ class AnalysisPipeline:
     def _group(self) -> None:
         self.stats.phase = PHASE_GROUP
         self._emit_phase(PHASE_GROUP, "Comparando as fotos e formando os grupos...")
+
+        # Se nada mudou desde a última análise (mesmas fotos, mesmos limites,
+        # mesmas decisões do usuário), os grupos já gravados continuam válidos.
+        fingerprint = self._grouping_fingerprint()
+        if (
+            self.stats.analyzed == 0
+            and self.repo.db.get_meta("grouping_fingerprint") == fingerprint
+            and self.repo.count_groups() > 0
+        ):
+            self._log("Nada mudou desde a última análise: os grupos já calculados foram reaproveitados.")
+            self._apply_summary()
+            return
+
         signatures = self.repo.load_signatures()
         if len(signatures) < 2:
             self._log("Fotos insuficientes para comparar.")
@@ -352,7 +375,18 @@ class AnalysisPipeline:
         if self._cancel.is_set():
             return
         self.repo.replace_groups(groups)
+        self.repo.db.set_meta("grouping_fingerprint", self._grouping_fingerprint())
+        self.repo.db.commit()
 
+        self._apply_summary()
+        self._log(
+            f"{gstats.candidate_pairs:n} pares candidatos, {gstats.compared_pairs:n} comparações, "
+            f"{gstats.groups:n} grupos formados em {gstats.elapsed_s:.1f}s."
+        )
+        self._emit_stats()
+
+    def _apply_summary(self) -> None:
+        """Copia os totais do banco para as estatísticas exibidas na tela."""
         summary = self.repo.summary()
         self.stats.groups_total = summary["groups"]
         self.stats.exact_duplicates = summary["exact_duplicates"]
@@ -360,11 +394,25 @@ class AnalysisPipeline:
         self.stats.similar_groups = summary["very_similar_groups"] + summary["similar_groups"]
         self.stats.reclaimable_bytes = summary["reclaimable_bytes"]
         self.stats.bad_photos = summary["bad_photos"]
-        self._log(
-            f"{gstats.candidate_pairs:n} pares candidatos, {gstats.compared_pairs:n} comparações, "
-            f"{gstats.groups:n} grupos formados em {gstats.elapsed_s:.1f}s."
+
+    def _grouping_fingerprint(self) -> str:
+        """Identifica o estado que define os grupos (fotos + limites + decisões)."""
+        thr = self.settings.thresholds.normalized()
+        row = self.repo.db.query_one(
+            "SELECT COUNT(*) AS n, COALESCE(MAX(analyzed_at), '') AS ultima FROM photos"
         )
-        self._emit_stats()
+        decisoes = self.repo.db.query_one("SELECT COUNT(*) AS n FROM decisions")
+        partes = [
+            f"{thr.duplicate_min}/{thr.very_similar_min}/{thr.similar_min}",
+            f"strict={self.settings.strict_mode}",
+            f"crops={self.settings.detect_crops}",
+            f"emb={self.settings.use_embeddings}",
+            f"onnx={self.settings.onnx_model_path}",
+            f"fotos={row['n'] if row else 0}",
+            f"ultima={row['ultima'] if row else ''}",
+            f"decisoes={decisoes['n'] if decisoes else 0}",
+        ]
+        return hashlib.sha1("|".join(partes).encode("utf-8")).hexdigest()
 
     # ------------------------------------------------------------------ eventos
     def _emit_stats(self) -> None:
@@ -403,4 +451,6 @@ def regroup_only(repo: Repository, settings: Settings) -> int:
     )
     groups, _stats = build_groups(signatures, options, repo.excluded_pairs())
     repo.replace_groups(groups)
+    repo.db.set_meta("grouping_fingerprint", "")   # força novo agrupamento na próxima análise
+    repo.db.commit()
     return len(groups)

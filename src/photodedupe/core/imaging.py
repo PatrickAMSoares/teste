@@ -312,6 +312,25 @@ def _convolve2d(arr: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     return out
 
 
+CROP_RATIO = 0.82   # recorte central usado para reconhecer fotos recortadas
+
+
+def center_crop_resize(arr: np.ndarray, ratio: float = CROP_RATIO) -> np.ndarray:
+    """Recorta o centro da imagem e volta ao tamanho original (2D ou 3D).
+
+    É assim que o aplicativo enxerga uma foto "como se" ela tivesse sido
+    recortada: comparando a versão recortada de uma com a versão inteira da
+    outra, um recorte deixa de passar despercebido.
+    """
+    h, w = arr.shape[0], arr.shape[1]
+    kh, kw = max(8, int(round(h * ratio))), max(8, int(round(w * ratio)))
+    oy, ox = (h - kh) // 2, (w - kw) // 2
+    crop = arr[oy : oy + kh, ox : ox + kw]
+    yi = np.clip(np.round(np.linspace(0, kh - 1, h)).astype(int), 0, kh - 1)
+    xi = np.clip(np.round(np.linspace(0, kw - 1, w)).astype(int), 0, kw - 1)
+    return crop[np.ix_(yi, xi)] if crop.ndim == 2 else crop[np.ix_(yi, xi)][:, :, :]
+
+
 def gradient_energy(gray: np.ndarray) -> float:
     """Energia média de bordas - usada para saber se a imagem tem textura suficiente."""
     if gray.size < 16:

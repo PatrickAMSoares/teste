@@ -34,6 +34,9 @@ HASH_WEIGHTS = {"phash": 0.36, "dhash": 0.30, "whash": 0.20, "ahash": 0.14}
 COS_FLOOR, COS_CEIL = 0.840, 0.9975
 NCC_FLOOR, NCC_CEIL = 0.560, 0.9970
 W_HASH, W_DESC, W_NCC = 0.30, 0.28, 0.42
+# Quando há indício de recorte, o peso migra para os sinais que toleram
+# mudança de enquadramento (descritor e correlação estrutural).
+W_HASH_CROP, W_DESC_CROP, W_NCC_CROP = 0.20, 0.30, 0.50
 
 LOW_TEXTURE = 2.5           # energia de gradiente abaixo disso = imagem "lisa"
 ASPECT_TOLERANCE = 0.012    # 1,2% de diferença de proporção ainda é a mesma foto
@@ -133,31 +136,88 @@ def _center_crop_resized(arr: np.ndarray, ratio: float = 0.82) -> np.ndarray:
     return crop[np.ix_(idx, idx)]
 
 
-def structural_similarity(a: PhotoSignature, b: PhotoSignature, allow_crop: bool = True) -> float:
-    """Correlação cruzada normalizada entre as assinaturas 32x32 (com tolerância a recorte)."""
+def _cached_crop(sig: PhotoSignature, arr: np.ndarray) -> np.ndarray:
+    """Recorte central da assinatura, calculado uma única vez por foto.
+
+    Cada foto participa de dezenas de comparações; sem este cache o mesmo
+    recorte seria recalculado a cada par. O resultado é guardado no próprio
+    objeto da assinatura, para acompanhar o ciclo de vida dela.
+    """
+    cached = getattr(sig, "_gray_crop", None)
+    if cached is None or cached.shape != arr.shape:
+        cached = _center_crop_resized(arr)
+        try:
+            sig._gray_crop = cached  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - assinatura imutável: segue sem cache
+            pass
+    return cached
+
+
+def structural_similarity(
+    a: PhotoSignature, b: PhotoSignature, allow_crop: bool = True
+) -> tuple[float, bool]:
+    """Correlação cruzada normalizada entre as assinaturas 32x32.
+
+    Retorna ``(correlação, veio_do_recorte)``. A versão recortada só é usada
+    quando ela é claramente melhor que a comparação direta.
+    """
     ga, gb = _as_gray(a), _as_gray(b)
     if ga is None or gb is None or ga.shape != gb.shape:
-        return float("nan")
-    best = _ncc(ga, gb)
-    if allow_crop:
-        for variant in (_ncc(_center_crop_resized(ga), gb), _ncc(ga, _center_crop_resized(gb))):
-            if not np.isnan(variant) and (np.isnan(best) or variant > best):
-                best = variant
-    return best
+        return float("nan"), False
+    plain = _ncc(ga, gb)
+    if not allow_crop:
+        return plain, False
+    best, from_crop = plain, False
+    for variant in (_ncc(_cached_crop(a, ga), gb), _ncc(ga, _cached_crop(b, gb))):
+        if not np.isnan(variant) and (np.isnan(best) or variant > best + 0.02):
+            best, from_crop = variant, True
+    return best, from_crop
 
 
-def hash_similarity(a: PhotoSignature, b: PhotoSignature) -> tuple[float, dict[str, int]]:
-    """Média ponderada dos quatro hashes perceptuais, normalizada em 0..1."""
+def hash_similarity(a: PhotoSignature, b: PhotoSignature, allow_crop: bool = True) -> tuple[float, dict[str, int], bool]:
+    """Média ponderada dos quatro hashes perceptuais, normalizada em 0..1.
+
+    Quando ``allow_crop`` está ativo, também são comparados os hashes do recorte
+    central de cada foto contra a versão inteira da outra. É isso que permite
+    reconhecer que uma imagem é o recorte da outra - caso em que os hashes das
+    versões inteiras divergem bastante.
+    """
     distances = {
         "phash": hamming(a.phash, b.phash),
         "dhash": hamming(a.dhash, b.dhash),
         "whash": hamming(a.whash, b.whash),
         "ahash": hamming(a.ahash, b.ahash),
     }
+    crop_match = False
+    if allow_crop and (a.crop_phash or b.crop_phash):
+        crop_distances = dict(distances)
+        for key, a_crop, b_crop, a_full, b_full in (
+            ("phash", a.crop_phash, b.crop_phash, a.phash, b.phash),
+            ("dhash", a.crop_dhash, b.crop_dhash, a.dhash, b.dhash),
+        ):
+            candidates = [distances[key]]
+            if a_crop:
+                candidates.append(hamming(a_crop, b_full))
+            if b_crop:
+                candidates.append(hamming(a_full, b_crop))
+            crop_distances[key] = min(candidates)
+        gain = (distances["phash"] + distances["dhash"]) - (crop_distances["phash"] + crop_distances["dhash"])
+        if gain >= 4:
+            crop_match = True
+            distances = crop_distances
+
+    if crop_match:
+        # Em um recorte, aHash e wHash (calculados sobre a imagem inteira)
+        # perdem o sentido: as bordas mudaram. Ficamos só com os hashes que
+        # têm versão recortada armazenada.
+        weights = {"phash": 0.55, "dhash": 0.45}
+    else:
+        weights = HASH_WEIGHTS
+
     total = 0.0
-    for name, weight in HASH_WEIGHTS.items():
+    for name, weight in weights.items():
         total += weight * _clamp01(1.0 - distances[name] / HASH_CUTOFF)
-    return total, distances
+    return total, distances, crop_match
 
 
 def compare(
@@ -189,18 +249,30 @@ def compare(
         )
 
     # ---------------------------------------- níveis 2 e 3: sinais visuais
-    hash_sim, distances = hash_similarity(a, b)
+    hash_sim, distances, hash_crop_match = hash_similarity(a, b, allow_crop=detect_crops)
     cos = cosine(a.descriptor, b.descriptor)
-    ncc = structural_similarity(a, b, allow_crop=detect_crops)
+    cos_crop = float("nan")
+    if detect_crops:
+        for candidate in (cosine(a.crop_descriptor, b.descriptor), cosine(a.descriptor, b.crop_descriptor)):
+            if not np.isnan(candidate) and (np.isnan(cos_crop) or candidate > cos_crop):
+                cos_crop = candidate
+    desc_crop_match = False
+    if not np.isnan(cos_crop) and (np.isnan(cos) or cos_crop > cos + 0.01):
+        cos, desc_crop_match = cos_crop, True
+    ncc, ncc_crop_match = structural_similarity(a, b, allow_crop=detect_crops)
+    crop_detected = hash_crop_match or desc_crop_match or ncc_crop_match
 
     desc_sim = _norm(cos, COS_FLOOR, COS_CEIL) if not np.isnan(cos) else float("nan")
     ncc_sim = _norm(ncc, NCC_FLOOR, NCC_CEIL) if not np.isnan(ncc) else float("nan")
 
-    parts: list[tuple[float, float]] = [(hash_sim, W_HASH)]
+    weight_hash, weight_desc, weight_ncc = (
+        (W_HASH_CROP, W_DESC_CROP, W_NCC_CROP) if crop_detected else (W_HASH, W_DESC, W_NCC)
+    )
+    parts: list[tuple[float, float]] = [(hash_sim, weight_hash)]
     if not np.isnan(desc_sim):
-        parts.append((desc_sim, W_DESC))
+        parts.append((desc_sim, weight_desc))
     if not np.isnan(ncc_sim):
-        parts.append((ncc_sim, W_NCC))
+        parts.append((ncc_sim, weight_ncc))
     weight_sum = sum(w for _, w in parts)
     combined = sum(v * w for v, w in parts) / weight_sum if weight_sum else 0.0
     percent = 100.0 * combined
@@ -208,14 +280,24 @@ def compare(
 
     # ------------------------------------------------ ajustes conservadores
     # Proporção diferente: quase sempre indica recorte ou outro enquadramento.
+    different_aspect = False
     if a.aspect and b.aspect:
         rel = abs(a.aspect - b.aspect) / max(a.aspect, b.aspect)
-        if rel > ASPECT_TOLERANCE:
-            if percent > CROP_CAP:
-                percent = CROP_CAP
-                capped_by = "recorte"
+        different_aspect = rel > ASPECT_TOLERANCE
+
+    if different_aspect or crop_detected:
+        if percent > CROP_CAP:
+            percent = CROP_CAP
+            capped_by = "recorte"
+        if different_aspect:
             notes.append(
-                f"As proporções são diferentes ({_ratio_text(a)} × {_ratio_text(b)}): uma delas provavelmente foi recortada."
+                f"As proporções são diferentes ({_ratio_text(a)} × {_ratio_text(b)}): "
+                "uma delas provavelmente foi recortada."
+            )
+        else:
+            notes.append(
+                "O conteúdo coincide melhor quando comparamos o centro de uma com a outra inteira: "
+                "uma das fotos parece ser um recorte da outra."
             )
 
     if strict:
@@ -286,7 +368,20 @@ def classify(percent: float, thresholds=None) -> Category:
 
 
 def quick_reject(a: PhotoSignature, b: PhotoSignature, margin: int = 26) -> bool:
-    """Descarte barato antes da comparação completa (evita contas desnecessárias)."""
+    """Descarte barato antes da comparação completa (evita contas desnecessárias).
+
+    Só descarta quando **todas** as assinaturas - inclusive as do recorte
+    central - estão muito distantes.
+    """
     if a.sha256 and a.sha256 == b.sha256:
         return False
-    return hamming(a.phash, b.phash) > margin and hamming(a.dhash, b.dhash) > margin
+    candidates = [hamming(a.phash, b.phash), hamming(a.dhash, b.dhash)]
+    if a.crop_phash:
+        candidates.append(hamming(a.crop_phash, b.phash))
+    if b.crop_phash:
+        candidates.append(hamming(a.phash, b.crop_phash))
+    if a.crop_dhash:
+        candidates.append(hamming(a.crop_dhash, b.dhash))
+    if b.crop_dhash:
+        candidates.append(hamming(a.dhash, b.crop_dhash))
+    return min(candidates) > margin
