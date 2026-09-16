@@ -1,0 +1,12 @@
+# Dependências obrigatórias
+PySide6>=6.6,<7
+numpy>=1.24
+Pillow>=10.0
+
+# Dependências opcionais (o app funciona sem elas, com recursos reduzidos)
+pillow-heif>=0.13      # suporte a HEIC/HEIF (fotos de iPhone)
+opencv-python-headless>=4.8  # acelera nitidez/redimensionamento (fallback NumPy existe)
+send2trash>=1.8        # envio para a Lixeira do sistema
+openpyxl>=3.1          # exportação de relatório em Excel
+reportlab>=4.0         # exportação de relatório em PDF
+rawpy>=0.19            # leitura de arquivos RAW (CR2, NEF, ARW, DNG...)
