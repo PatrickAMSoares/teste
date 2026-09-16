@@ -62,6 +62,7 @@ class PlanItem:
     keeper_path: str = ""
     keeper_quality: float = 0.0
     problem: str = ""
+    explicit: bool = False       # escolha manual do usuário, fora de um grupo
 
     @property
     def valid(self) -> bool:
@@ -178,6 +179,37 @@ class FileManager:
             plan.items.append(item)
         return plan
 
+    def build_manual_plan(
+        self, file_ids: Sequence[int], mode: str = MODE_QUARANTINE, reason: str = "seleção manual"
+    ) -> DeletionPlan:
+        """Plano para arquivos escolhidos individualmente (fora dos grupos).
+
+        Usado, por exemplo, na tela de fotos com problema. Continua exigindo
+        confirmação explícita e continua reversível.
+        """
+        plan = DeletionPlan(mode=mode, quarantine_dir=str(self.quarantine_dir))
+        ids = [int(i) for i in file_ids]
+        if not ids:
+            return plan
+        placeholders = ",".join("?" * len(ids))
+        rows = self.repo.db.query(
+            f"SELECT f.id AS file_id, f.path, f.size, p.quality FROM files f "
+            f"LEFT JOIN photos p ON p.file_id=f.id WHERE f.id IN ({placeholders})",
+            ids,
+        )
+        for row in rows:
+            item = PlanItem(
+                file_id=int(row["file_id"]),
+                path=row["path"],
+                size=int(row["size"] or 0),
+                quality=float(row["quality"] or 0.0),
+                category=reason,
+                explicit=True,
+            )
+            item.problem = self._validate(item)
+            plan.items.append(item)
+        return plan
+
     def _validate(self, item: PlanItem) -> str:
         """Confere, arquivo por arquivo, se a remoção é segura. Retorna o problema encontrado."""
         path = Path(item.path)
@@ -198,7 +230,7 @@ class FileManager:
                 return "é o próprio arquivo recomendado para manter"
             if not keeper.exists():
                 return "a foto que seria mantida não está mais no disco"
-        else:
+        elif not item.explicit:
             return "não foi possível identificar qual foto seria mantida"
 
         try:

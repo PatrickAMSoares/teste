@@ -330,6 +330,7 @@ class Repository:
         limit: int | None = None,
         offset: int = 0,
         order: str = "wasted_desc",
+        filters: dict | None = None,
     ) -> list[Group]:
         where = []
         params: list = []
@@ -339,6 +340,10 @@ class Repository:
         if statuses:
             where.append(f"g.status IN ({','.join('?' * len(statuses))})")
             params.extend(statuses)
+        member_sql, member_params = _member_filter_sql(filters)
+        if member_sql:
+            where.append(member_sql)
+            params.extend(member_params)
         order_sql = {
             "wasted_desc": "g.wasted_bytes DESC, g.id",
             "wasted_asc": "g.wasted_bytes ASC, g.id",
@@ -391,6 +396,8 @@ class Repository:
                     texture=float(row["texture"] or 0.0),
                     taken_at=row["taken_at"] or "",
                     camera=row["camera"] or "",
+                    thumb=row["thumb"] or "",
+                    bad_flags=row["bad_flags"] or "",
                 )
                 members.append(
                     Member(
@@ -416,7 +423,22 @@ class Repository:
             )
         return groups
 
-    def count_groups(self, categories: Sequence[str] | None = None, statuses: Sequence[str] | None = None) -> int:
+    def load_group(self, group_id: int) -> Group | None:
+        """Carrega um grupo específico (usado ao atualizar um cartão na tela)."""
+        rows = self.db.query("SELECT category FROM groups WHERE id=?", (group_id,))
+        if not rows:
+            return None
+        for group in self.load_groups(categories=[rows[0]["category"]], order="id", limit=100000):
+            if group.group_id == group_id:
+                return group
+        return None
+
+    def count_groups(
+        self,
+        categories: Sequence[str] | None = None,
+        statuses: Sequence[str] | None = None,
+        filters: dict | None = None,
+    ) -> int:
         sql = "SELECT COUNT(*) AS n FROM groups g"
         where, params = [], []
         if categories:
@@ -425,6 +447,10 @@ class Repository:
         if statuses:
             where.append(f"g.status IN ({','.join('?' * len(statuses))})")
             params.extend(statuses)
+        member_sql, member_params = _member_filter_sql(filters)
+        if member_sql:
+            where.append(member_sql)
+            params.extend(member_params)
         if where:
             sql += " WHERE " + " AND ".join(where)
         row = self.db.query_one(sql, params)
@@ -436,6 +462,23 @@ class Repository:
             (choice, group_id, file_id),
         )
         self.db.commit()
+
+    def set_reference(self, group_id: int, file_id: int) -> None:
+        """Troca a foto principal do grupo (a que será sempre mantida)."""
+        with self.db.lock:
+            conn = self.db.connection
+            conn.execute("UPDATE group_members SET is_reference=0 WHERE group_id=?", (group_id,))
+            conn.execute(
+                "UPDATE group_members SET is_reference=1, user_choice='keep', recommendation='keep' "
+                "WHERE group_id=? AND file_id=?",
+                (group_id, file_id),
+            )
+            conn.execute("UPDATE groups SET reference_id=? WHERE id=?", (file_id, group_id))
+            conn.commit()
+        self.refresh_group_totals(group_id)
+
+    def group_files(self, group_id: int) -> list[int]:
+        return [int(r["file_id"]) for r in self.db.query("SELECT file_id FROM group_members WHERE group_id=?", (group_id,))]
 
     def set_group_status(self, group_id: int, status: str) -> None:
         self.db.execute("UPDATE groups SET status=? WHERE id=?", (status, group_id))
@@ -678,6 +721,69 @@ class Repository:
             for table in ("group_members", "groups", "photos", "files", "decisions", "sessions"):
                 conn.execute(f"DELETE FROM {table}")
             conn.commit()
+
+
+def _member_filter_sql(filters: dict | None) -> tuple[str, list]:
+    """Monta um EXISTS sobre os membros do grupo a partir dos filtros da interface."""
+    filters = filters or {}
+    conds: list[str] = []
+    params: list = []
+    if filters.get("text"):
+        conds.append("f2.path LIKE ?")
+        params.append(f"%{filters['text']}%")
+    if filters.get("formats"):
+        fmts = list(filters["formats"])
+        conds.append(f"UPPER(p2.format) IN ({','.join('?' * len(fmts))})")
+        params.extend([f.upper() for f in fmts])
+    if filters.get("folder"):
+        conds.append("f2.path LIKE ?")
+        params.append(f"{filters['folder']}%")
+    if filters.get("max_quality") is not None:
+        conds.append("p2.quality <= ?")
+        params.append(float(filters["max_quality"]))
+    if filters.get("min_quality") is not None:
+        conds.append("p2.quality >= ?")
+        params.append(float(filters["min_quality"]))
+    if filters.get("min_size") is not None:
+        conds.append("f2.size >= ?")
+        params.append(int(filters["min_size"]))
+    if filters.get("min_megapixels") is not None:
+        conds.append("(p2.width * p2.height) >= ?")
+        params.append(float(filters["min_megapixels"]) * 1_000_000)
+    if filters.get("max_megapixels") is not None:
+        conds.append("(p2.width * p2.height) <= ?")
+        params.append(float(filters["max_megapixels"]) * 1_000_000)
+    if filters.get("has_exif") is True:
+        conds.append("p2.has_exif=1")
+    elif filters.get("has_exif") is False:
+        conds.append("p2.has_exif=0")
+    if filters.get("bad_flag"):
+        conds.append("p2.bad_flags LIKE ?")
+        params.append(f"%{filters['bad_flag']}%")
+    if filters.get("date_from"):
+        conds.append("p2.taken_at >= ?")
+        params.append(filters["date_from"])
+    if filters.get("date_to"):
+        conds.append("p2.taken_at <= ?")
+        params.append(filters["date_to"])
+
+    group_conds: list[str] = []
+    if filters.get("min_similarity") is not None:
+        group_conds.append("g.min_sim >= ?")
+        params_tail = [float(filters["min_similarity"])]
+    else:
+        params_tail = []
+
+    sql_parts: list[str] = []
+    if conds:
+        sql_parts.append(
+            "EXISTS (SELECT 1 FROM group_members gm2 JOIN files f2 ON f2.id=gm2.file_id "
+            "LEFT JOIN photos p2 ON p2.file_id=gm2.file_id "
+            "WHERE gm2.group_id=g.id AND " + " AND ".join(conds) + ")"
+        )
+    sql_parts.extend(group_conds)
+    params.extend(params_tail)
+    return (" AND ".join(sql_parts), params) if sql_parts else ("", [])
 
 
 def _exif_payload(exif: ExifData) -> dict:

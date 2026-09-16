@@ -158,6 +158,8 @@ class PhotoSignature:
     taken_at: str = ""
     capture_key: str = ""
     camera: str = ""
+    thumb: str = ""
+    bad_flags: str = ""
 
     @property
     def megapixels(self) -> float:
