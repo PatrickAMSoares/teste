@@ -83,7 +83,7 @@ def _interp(value: float, points: list[tuple[float, float]]) -> float:
         return points[0][1]
     if value >= points[-1][0]:
         return points[-1][1]
-    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+    for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False):
         if x0 <= value <= x1:
             t = (value - x0) / (x1 - x0) if x1 > x0 else 0.0
             return y0 + t * (y1 - y0)

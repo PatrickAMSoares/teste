@@ -1,0 +1,33 @@
+# Informações de versão exibidas pelo Windows nas propriedades do arquivo.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0),
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          "041604B0",
+          [
+            StringStruct("CompanyName", "PhotoDedupe"),
+            StringStruct("FileDescription", "PhotoDedupe - Organizador de Fotos Duplicadas"),
+            StringStruct("FileVersion", "1.0.0.0"),
+            StringStruct("InternalName", "PhotoDedupe"),
+            StringStruct("LegalCopyright", "Distribuído sob a licença MIT"),
+            StringStruct("OriginalFilename", "PhotoDedupe.exe"),
+            StringStruct("ProductName", "PhotoDedupe"),
+            StringStruct("ProductVersion", "1.0.0.0"),
+          ],
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct("Translation", [1046, 1200])]),
+  ],
+)

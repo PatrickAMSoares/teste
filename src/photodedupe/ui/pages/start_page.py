@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from ...config import Settings
 from ..theme import palette
-from ..widgets.common import Card, Separator, number, title_block
+from ..widgets.common import Card, number, title_block
 
 
 class StartPage(QWidget):

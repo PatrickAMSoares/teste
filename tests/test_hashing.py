@@ -64,7 +64,7 @@ def test_faixas_garantem_candidatos_para_distancias_pequenas():
     proximo = valor ^ 0b111  # distância 3
     faixas_a = hashing.bands(valor)
     faixas_b = hashing.bands(proximo)
-    assert any(a == b for a, b in zip(faixas_a, faixas_b))
+    assert any(a == b for a, b in zip(faixas_a, faixas_b, strict=True))
 
 
 def test_conversao_para_inteiro_com_sinal_do_sqlite():

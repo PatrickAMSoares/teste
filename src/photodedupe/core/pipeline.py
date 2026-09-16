@@ -26,9 +26,9 @@ import os
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
-from typing import Callable
 
 from ..config import Settings
 from ..db.repository import Repository

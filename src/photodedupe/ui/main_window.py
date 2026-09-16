@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
@@ -23,10 +22,9 @@ from PySide6.QtWidgets import (
 
 from .. import APP_DISPLAY_NAME, __version__
 from ..config import Settings
-from ..core.fileops import HAS_SEND2TRASH, MODE_QUARANTINE, FileManager, format_bytes
+from ..core.fileops import HAS_SEND2TRASH, FileManager, format_bytes
 from ..db.database import Database
 from ..db.repository import Repository
-from ..paths import reports_dir
 from .pages.badphotos_page import BadPhotosPage
 from .pages.groups_page import GroupsPage
 from .pages.report_page import ReportPage

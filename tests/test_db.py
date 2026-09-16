@@ -6,7 +6,7 @@ import sqlite3
 
 from conftest import make_photo
 
-from photodedupe.core.analyzer import analyze_path, signature_from_result
+from photodedupe.core.analyzer import analyze_path
 from photodedupe.core.grouping import build_groups
 from photodedupe.core.models import Category
 from photodedupe.db.database import SCHEMA_VERSION, Database

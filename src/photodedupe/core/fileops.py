@@ -25,10 +25,10 @@ import logging
 import os
 import shutil
 import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Sequence
 
 from ..db.repository import Repository
 from ..paths import default_quarantine_dir

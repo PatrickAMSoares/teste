@@ -113,7 +113,6 @@ def test_sem_efeito_corrente_entre_fotos_distintas(tmp_path):
     grupos, _ = build_groups(_sigs(caminhos), GroupingOptions())
     for grupo in grupos:
         # Cada grupo só contém fotos comparadas diretamente com a referência.
-        referencia = grupo.reference
         for membro in grupo.members:
             if membro.is_reference:
                 continue

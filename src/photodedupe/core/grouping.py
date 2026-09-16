@@ -20,8 +20,8 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Callable, Iterable
 
 import numpy as np
 
@@ -29,7 +29,7 @@ from ..config import Thresholds
 from . import embeddings
 from .hashing import bands
 from .models import Category, Group, Member, PhotoSignature
-from .similarity import SimilarityResult, classify, compare, quick_reject
+from .similarity import SimilarityResult, compare, quick_reject
 
 log = logging.getLogger(__name__)
 

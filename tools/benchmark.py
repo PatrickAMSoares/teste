@@ -119,7 +119,7 @@ def evaluate(groups, truth: dict) -> dict:
 
         if tier in DUP_TIERS:
             reference_origin = origins[0][0]
-            for origin, relation, path, similarity in origins[1:]:
+            for origin, _relation, path, similarity in origins[1:]:
                 if origin != reference_origin:
                     false_positive_pairs.append((paths[0], path, tier, similarity))
 
@@ -132,7 +132,7 @@ def evaluate(groups, truth: dict) -> dict:
     detected = defaultdict(int)
     missed: dict[str, list[str]] = defaultdict(list)
     totals = defaultdict(int)
-    for origin, items in expected.items():
+    for _origin, items in expected.items():
         family = {path for path, relation in items if relation in DUPLICATE_RELATIONS}
         for path, relation in items:
             if relation not in ("exact", "visual"):

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from ...core.models import Category, Group
 from ..theme import palette
@@ -119,7 +119,7 @@ class GroupCard(Card):
 
     # -------------------------------------------------------------- ações
     def accept_recommendation(self) -> None:
-        for file_id, card in self.cards.items():
+        for card in self.cards.values():
             if card.member.is_reference:
                 continue
             if card.member.recommendation == "remove":

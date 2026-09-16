@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ..db.repository import Repository
 from .fileops import format_bytes
-from .models import BadFlag, Category
+from .models import BadFlag
 
 log = logging.getLogger(__name__)
 
