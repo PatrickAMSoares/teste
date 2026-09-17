@@ -24,12 +24,21 @@ from .imaging import (
 from .models import BadFlag
 from .quality import sharpness_score
 
-# Resoluções de tela comuns (largura ou altura), usadas como indício de print.
-_SCREEN_DIMS = {
-    640, 720, 750, 768, 800, 828, 1024, 1080, 1125, 1136, 1170, 1179, 1242,
-    1280, 1284, 1290, 1366, 1440, 1536, 1600, 1668, 1792, 1920, 2048, 2160,
-    2224, 2388, 2436, 2532, 2556, 2560, 2732, 2778, 2796, 3024, 3840, 4096,
+# Resoluções de tela completas (largura × altura). Usar o par exato - e não
+# cada dimensão isolada - evita confundir uma foto 1920×1440 com um print.
+_SCREEN_RESOLUTIONS = {
+    (1024, 768), (1280, 720), (1280, 800), (1280, 1024), (1360, 768), (1366, 768),
+    (1440, 900), (1536, 864), (1600, 900), (1680, 1050), (1920, 1080), (1920, 1200),
+    (2048, 1152), (2240, 1400), (2256, 1504), (2560, 1440), (2560, 1600), (2880, 1620),
+    (2880, 1800), (3024, 1964), (3440, 1440), (3456, 2234), (3840, 2160), (5120, 2880),
+    # Telas de celular (retrato) - prints de aplicativos.
+    (750, 1334), (828, 1792), (1080, 1920), (1080, 2340), (1080, 2400), (1125, 2436),
+    (1170, 2532), (1179, 2556), (1242, 2688), (1284, 2778), (1290, 2796), (1440, 2560),
+    (1440, 3040), (1440, 3120),
 }
+_SCREEN_RESOLUTIONS |= {(h, w) for w, h in _SCREEN_RESOLUTIONS}
+SCREENSHOT_THRESHOLD = 0.65
+
 _SCREENSHOT_NAME = re.compile(r"(screenshot|screen[ _-]?shot|captura[ _-]?de[ _-]?tela|print[ _-]?screen|scr\d{4})", re.I)
 _MEME_NAME = re.compile(r"(meme|whatsapp image|img-\d{8}-wa|sticker|figurinha|wallpaper|papel de parede)", re.I)
 
@@ -88,7 +97,7 @@ def analyze(
 
     screenshot = _screenshot_score(decoded, exif, name, flat, uniq, color)
     details["indicio_print"] = round(screenshot, 2)
-    if screenshot >= 0.6:
+    if screenshot >= SCREENSHOT_THRESHOLD:
         flags.append(BadFlag.SCREENSHOT.value)
 
     non_photo = _non_photo_score(exif, flat, uniq, color, name, stats)
@@ -102,25 +111,32 @@ def analyze(
 def _screenshot_score(
     decoded: DecodedImage, exif: ExifData, name: str, flat: float, uniq: float, color: float
 ) -> float:
+    """Indício de captura de tela, de 0 a 1.
+
+    Cópias de fotos reexportadas (PNG/WEBP sem EXIF) chegavam a ser confundidas
+    com prints. Por isso o peso está nos sinais realmente característicos de uma
+    tela: resolução de monitor exata, grandes áreas chapadas e paleta reduzida.
+    A ausência de EXIF, sozinha, quase não conta.
+    """
     score = 0.0
     if _SCREENSHOT_NAME.search(name):
-        score += 0.55
-    if not exif.has_camera:
-        score += 0.22
-    if decoded.format.upper() == "PNG":
-        score += 0.12
-    if decoded.width in _SCREEN_DIMS and decoded.height in _SCREEN_DIMS:
-        score += 0.22
-    elif decoded.width in _SCREEN_DIMS or decoded.height in _SCREEN_DIMS:
-        score += 0.08
-    if flat > 0.25:
-        score += 0.18
-    if uniq < 0.02:
-        score += 0.12
-    if color < 14:
-        score += 0.06
+        score += 0.6
+    if (decoded.width, decoded.height) in _SCREEN_RESOLUTIONS:
+        score += 0.3
+    if flat > 0.35:
+        score += 0.2
+    elif flat > 0.22:
+        score += 0.1
+    if uniq < 0.01:
+        score += 0.15
+    elif uniq < 0.02:
+        score += 0.05
+    if color < 10:
+        score += 0.1
+    if decoded.format.upper() == "PNG" and not exif.has_camera:
+        score += 0.1
     if exif.has_camera:
-        score -= 0.45  # foto de câmera: quase certamente não é print
+        score -= 0.6   # foto de câmera: praticamente descarta a hipótese
     return max(0.0, min(1.0, score))
 
 

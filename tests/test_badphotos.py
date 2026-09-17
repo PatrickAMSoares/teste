@@ -86,3 +86,33 @@ def test_captura_de_tela_e_reconhecida(tmp_path):
 def test_rotulos_em_portugues():
     rotulos = badphotos.describe([BadFlag.BLURRY.value, BadFlag.DARK.value])
     assert rotulos == ["Desfocada", "Muito escura"]
+
+
+def test_copia_em_png_sem_exif_nao_e_confundida_com_print(tmp_path):
+    """Regressão: reexportar uma foto em PNG não pode virar “captura de tela”.
+
+    Cópias sem EXIF, em PNG e com áreas de céu lisas chegavam a ser marcadas
+    como print só por causa desses três indícios fracos.
+    """
+    for largura, altura in ((1920, 1440), (1600, 1200), (1280, 960)):
+        path = tmp_path / f"IMG_{largura}.png"
+        make_photo(12, largura, altura).save(path)          # sem EXIF, PNG
+        flags, detalhes = _flags(path)
+        assert BadFlag.SCREENSHOT.value not in flags, (
+            f"{largura}×{altura} marcada como print (indício {detalhes['indicio_print']})"
+        )
+
+
+def test_print_de_celular_e_reconhecido(tmp_path):
+    from PIL import Image, ImageDraw
+
+    path = tmp_path / "print_app.png"
+    imagem = Image.new("RGB", (1170, 2532), (250, 250, 252))     # resolução de iPhone
+    draw = ImageDraw.Draw(imagem)
+    draw.rectangle([0, 0, 1170, 120], fill=(20, 22, 30))
+    for linha in range(18):
+        draw.rounded_rectangle([60, 200 + linha * 120, 1110, 300 + linha * 120], 24, fill=(226, 230, 238))
+    imagem.save(path)
+
+    flags, _ = _flags(path)
+    assert BadFlag.SCREENSHOT.value in flags
