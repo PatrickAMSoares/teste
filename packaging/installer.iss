@@ -62,10 +62,16 @@ brazilianportuguese.WelcomeLabel2=Este assistente vai instalar o [name/ver] no s
 [Code]
 // Na desinstalação, perguntamos sobre os dados locais. As FOTOS do usuário e a
 // pasta de quarentena nunca são apagadas pelo desinstalador.
+//
+// Observação de sintaxe: nenhuma linha deste bloco pode COMEÇAR com "#", porque
+// o pré-processador do Inno Setup trataria isso como uma diretiva. Por isso as
+// mensagens são montadas em variáveis, com as quebras de linha no fim da linha.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DadosApp: string;
   Quarentena: string;
+  Pergunta: string;
+  Aviso: string;
 begin
   if CurUninstallStep = usPostUninstall then
   begin
@@ -74,10 +80,12 @@ begin
 
     if DirExists(DadosApp) then
     begin
-      if MsgBox('Deseja remover também o banco de dados e as miniaturas geradas pelo PhotoDedupe?' + #13#10#13#10 +
-                'Suas fotos NÃO serão apagadas. A pasta de quarentena também será mantida,' + #13#10 +
-                'caso ainda existam arquivos aguardando sua decisão em:' + #13#10 + Quarentena,
-                mbConfirmation, MB_YESNO) = IDYES then
+      Pergunta := 'Deseja remover também o banco de dados e as miniaturas geradas pelo PhotoDedupe?' + #13#10 + #13#10 +
+        'Suas fotos NÃO serão apagadas. A pasta de quarentena também será mantida,' + #13#10 +
+        'caso ainda existam arquivos aguardando sua decisão em:' + #13#10 +
+        Quarentena;
+
+      if MsgBox(Pergunta, mbConfirmation, MB_YESNO) = IDYES then
       begin
         DelTree(DadosApp + '\thumbnails', True, True, True);
         DeleteFile(DadosApp + '\photodedupe.db');
@@ -87,9 +95,12 @@ begin
       end;
 
       if DirExists(Quarentena) then
-        MsgBox('Atenção: ainda existem arquivos na pasta de quarentena:' + #13#10#13#10 + Quarentena +
-               #13#10#13#10 + 'Eles não foram apagados. Verifique se deseja restaurá-los ou excluí-los manualmente.',
-               mbInformation, MB_OK);
+      begin
+        Aviso := 'Atenção: ainda existem arquivos na pasta de quarentena:' + #13#10 + #13#10 +
+          Quarentena + #13#10 + #13#10 +
+          'Eles não foram apagados. Verifique se deseja restaurá-los ou excluí-los manualmente.';
+        MsgBox(Aviso, mbInformation, MB_OK);
+      end;
     end;
   end;
 end;
